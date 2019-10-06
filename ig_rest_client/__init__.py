@@ -123,9 +123,41 @@ class IgRestSessionUsingVersion2LogIn(AbstractIgRestSession):
             log.error('Response text: %s', response.text)
             raise Exception
 
-    def _log_in(self) -> None:
+    def _get_encryption_key(self) -> (str, int):
+        response = request("GET",
+                           urljoin(self._rest_api_url, 'session/encryptionKey'),
+                           headers=self._headers)
+        if response.ok:
+            response_json = response.json()
+        else:
+            log.error('Failed to get encryption key')
+            log.error('Status code: %s', response.status_code)
+            log.error('Response text: %s', response.text)
+            raise Exception
+        return (response_json['encryptionKey'], response_json["timeStamp"])
+
+    def _get_encrypted_password(self) -> str:
+        pw = self._rest_api_password
+        key, ts = self._get_encryption_key()
+        from Crypto.PublicKey import RSA
+        from base64 import b64decode, b64encode
+        from Crypto.Cipher import PKCS1_v1_5
+        key_obj = RSA.importKey(b64decode(key))
+        cipher = PKCS1_v1_5.new(key_obj)
+        msg = b64encode((pw+'|'+str(ts)).encode())
+        ciphertext = b64encode(cipher.encrypt(msg))
+        return ciphertext.decode()
+
+    def _log_in(self, encrypt=False) -> None:
+        data = dict(identifier=self._rest_api_username)
+        if encrypt:
+            data['password'] = self._get_encrypted_password()
+            data['encryptedPassword'] = True
+        else:
+            data['password'] = self._rest_api_password
+
         response = request('POST', urljoin(self._rest_api_url, 'session'),
-                           data=json.dumps({'encryptedPassword': False, 'identifier': self._rest_api_username, 'password': self._rest_api_password}),
+                           data=json.dumps(data),
                            headers={**self._headers, 'Version': '2'}, timeout=self._rest_api_timeout)
         if response.ok:
             response_json = response.json()
